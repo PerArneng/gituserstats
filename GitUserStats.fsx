@@ -15,21 +15,21 @@ let formatChangeStats fileCount insertions deletions netRows =
 let formatSummary (summary:Git.Summary) = 
         let a = summary.Author
         let c = summary.ChangeStats
-        sprintf "%s <- %s %s"
+        sprintf "%s %s <%s>"
             (formatChangeStats (string c.FileCount) (string c.Insertions) (string c.Deletions) (string c.NetRows)) a.Name a.EMail
 
 let main args =
     
-    let commitsx = args 
+    let commits = args 
                     |> findGitRepos
                     |> Seq.cast<Git.GitRepo>
                     |> Seq.map Git.getCommits
                     |> Seq.collect (fun c -> c)
 
-    let summaryByEmail = Git.summaryByEMail commitsx
+    let summaryByEmail = Git.summaryByEMail commits
 
-    printfn "%s" (formatChangeStats "FileCount" "Insertions" "Deletions" "NetRows") 
-    printfn "----------------------------------------"
+    printfn "%s User" (formatChangeStats "FileCount" "Insertions" "Deletions" "NetRows") 
+    printfn "------------------------------------------------"
 
     summaryByEmail
         |> Seq.map formatSummary 

@@ -16,6 +16,6 @@ and in your path.
 ## Usage
 
 ```
-$ fsi gituserstats.fsx <git repo folders...>
+$ fsi GitUserStats.fsx <git repo folders...>
 ```
 
