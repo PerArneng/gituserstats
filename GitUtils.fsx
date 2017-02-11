@@ -1,7 +1,8 @@
-
+﻿
 #load "OSUtils.fsx"
 open OSUtils
 
+open System
 open System.IO
 open System.Text.RegularExpressions
 
@@ -25,11 +26,13 @@ module Git =
         member this.Deletions = deletions
         member this.NetRows = insertions - deletions
 
-    [<StructuredFormatDisplay("Commit({Author}, {ChangeStats})")>]
-    type Commit (repo:GitRepo, author:Author, changeStats:ChangeStats) =
+    [<StructuredFormatDisplay("Commit({Author}, {ChangeStats}, {Date})")>]
+    type Commit (repo:GitRepo, author:Author, 
+                 changeStats:ChangeStats, date:DateTime) =
         member this.Repo = repo
         member this.Author = author
         member this.ChangeStats = changeStats
+        member this.Date = date
 
     [<StructuredFormatDisplay("Summary({Author}, {ChangeStats})")>]
     type Summary (author:Author, changeStats:ChangeStats) =
@@ -75,23 +78,27 @@ module Git =
     let parseCommitLog (repo:GitRepo) (commitLog:string) = seq {
         let rows = (commitLog.Split [|'\n'|])
         let mutable author:Option<Author> = None 
-    
+        let mutable date:Option<DateTime> = None 
+
         for row in rows do
         
             if row.StartsWith "info|" then
                 let items = row.Split [|'|'|]
                 author <- Some(Author(items.[1], items.[2]))
+                date <- Some(DateTime.Parse(items.[3]))
             elif isChangesLine row then
                 let changeStats = parseChangStat row
-                let commit = Commit(repo, author.Value, changeStats)
+                let commit = Commit(repo, author.Value, 
+                                    changeStats, date.Value)
                 author <- None
-                yield commit        
+                date <- None
+                yield commit  
     }            
             
     let getCommits (repo:GitRepo):seq<Commit> =
         let git = runGitInDir repo.FullPath
         let branch = git "rev-parse --abbrev-ref HEAD"
-        let commitLog = git "--no-pager log --shortstat --pretty=\"format:info|%an|%ae\""
+        let commitLog = git "--no-pager log --shortstat --pretty=\"format:info|%an|%ae|%ai\""
         parseCommitLog repo commitLog
 
     let commitsToChangeStats (commits:seq<Commit>) =
