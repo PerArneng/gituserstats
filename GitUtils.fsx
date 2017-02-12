@@ -26,13 +26,15 @@ module Git =
         member this.Deletions = deletions
         member this.NetRows = insertions - deletions
 
-    [<StructuredFormatDisplay("Commit({Author}, {ChangeStats}, {Date})")>]
-    type Commit (repo:GitRepo, author:Author, 
+    [<StructuredFormatDisplay("Commit({Repo}, {Branches}, {Id}, {Author}, {ChangeStats}, {Date})")>]
+    type Commit (repo:GitRepo,  branches:seq<string>, id:string, author:Author, 
                  changeStats:ChangeStats, date:DateTime) =
         member this.Repo = repo
         member this.Author = author
         member this.ChangeStats = changeStats
         member this.Date = date
+        member this.Branches = branches
+        member this.Id = id;
 
     [<StructuredFormatDisplay("Summary({Author}, {ChangeStats})")>]
     type Summary (author:Author, changeStats:ChangeStats) =
@@ -40,7 +42,7 @@ module Git =
         member this.ChangeStats = changeStats
 
     let runGitInDir dir args =
-        OS.execAndGetStdOutAsString dir "git" args
+        OS.execAndGetLines dir "git" args
 
     let containsPattern pattern str =
         Regex.Matches(str, pattern).Count > 0
@@ -75,31 +77,53 @@ module Git =
                 deletions <- amount
         ChangeStats(files, insertions, deletions)
 
-    let parseCommitLog (repo:GitRepo) (commitLog:string) = seq {
-        let rows = (commitLog.Split [|'\n'|])
+    let parseCommitLog (repo:GitRepo) (branch:string) (rows:seq<string>) = seq {
         let mutable author:Option<Author> = None 
         let mutable date:Option<DateTime> = None 
+        let mutable id:Option<string> = None
 
         for row in rows do
         
             if row.StartsWith "info|" then
                 let items = row.Split [|'|'|]
-                author <- Some(Author(items.[1], items.[2]))
-                date <- Some(DateTime.Parse(items.[3]))
+                id <- Some(items.[1])
+                author <- Some(Author(items.[2], items.[3]))
+                date <- Some(DateTime.Parse(items.[4]))
             elif isChangesLine row then
                 let changeStats = parseChangStat row
-                let commit = Commit(repo, author.Value, 
+                let commit = Commit(repo, [branch], id.Value, author.Value, 
                                     changeStats, date.Value)
+                id<- None
                 author <- None
                 date <- None
                 yield commit  
     }            
-            
+           
+    /// distinct per commit id. branches are collected in to the one
+    /// commit that is chosen   
+    let distinctCommits (commits:seq<Commit>) =
+        commits |> Seq.groupBy (fun c -> c.Id)
+                |> Seq.map (fun group -> snd group)
+                |> Seq.map (fun commitList ->
+                    let branches = commitList 
+                                        |> Seq.collect (fun c -> c.Branches)
+                                        |> Seq.distinct
+                    let head = commitList |> Seq.head
+                    Commit(head.Repo, branches, head.Id, head.Author, 
+                           head.ChangeStats, head.Date)
+                )
+
     let getCommits (repo:GitRepo):seq<Commit> =
         let git = runGitInDir repo.FullPath
-        let branch = git "rev-parse --abbrev-ref HEAD"
-        let commitLog = git "--no-pager log --shortstat --pretty=\"format:info|%an|%ae|%ai\""
-        parseCommitLog repo commitLog
+        let branches = git "branch -a" 
+                                |> Seq.map (fun s -> s.Trim())
+                                |> Seq.filter (fun s -> s.Contains "remotes")
+                                |> Seq.filter (fun s -> not (s.Contains "->"))
+        branches 
+            |> Seq.collect (fun branch ->
+                let command = (sprintf "--no-pager log %s --shortstat --pretty=\"format:info|%%h|%%an|%%ae|%%ai\"" branch)
+                parseCommitLog repo branch (git command) 
+            ) |> distinctCommits
 
     let commitsToChangeStats (commits:seq<Commit>) =
         commits |> Seq.map (fun c -> c.ChangeStats)

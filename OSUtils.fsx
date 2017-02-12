@@ -1,4 +1,4 @@
-
+﻿
 module OS =
 
     let execAndGetStdOutAsString workingDirectory program args  =
@@ -10,3 +10,8 @@ module OS =
         p.StartInfo.WorkingDirectory <- workingDirectory
         p.Start() |> ignore 
         p.StandardOutput.ReadToEnd()
+
+    let execAndGetLines workingDirectory program args =
+        execAndGetStdOutAsString workingDirectory program args
+            |> fun s -> s.Split [|'\n'|]
+            |> Seq.cast<string>
