@@ -32,22 +32,20 @@ module Git =
         member this.File = file
         member this.ChangeStats = changeStats
 
-    [<StructuredFormatDisplay("Commit({Repo}, {Branches}, {Id}, {Author}, {ChangeStats}, {CalculatedChangeStats}, {Date}, {FileChanges})")>]
+    let sumChangStats (changeStatsx:seq<ChangeStats>):ChangeStats =
+        let folder (acc:ChangeStats) (cs:ChangeStats) : ChangeStats = 
+            ChangeStats(acc.FileCount + cs.FileCount, acc.Insertions + cs.Insertions, acc.Deletions + cs.Deletions)
+        Seq.fold folder (ChangeStats(0, 0, 0)) changeStatsx
+
+    [<StructuredFormatDisplay("Commit({Repo}, {Branches}, {Id}, {Author}, {ChangeStats}, {Date}, {FileChanges})")>]
     type Commit (repo:GitRepo,  branches:seq<string>, id:string, author:Author, 
-                 changeStats:ChangeStats, date:DateTime, fileChanges:seq<FileChange>) =
+                 date:DateTime, fileChanges:seq<FileChange>) =
 
-        let sumChangStats (changeStatsx:seq<ChangeStats>):ChangeStats = 
-            Seq.fold (fun acc (cs:ChangeStats) -> ChangeStats(acc.FileCount + cs.FileCount, 
-                                                              acc.Insertions + cs.Insertions, 
-                                                              acc.Deletions + cs.Deletions)
-                     ) (ChangeStats(0, 0, 0)) changeStatsx
-
-        member this.CalculatedChangeStats =  fileChanges
-                                                |> Seq.map (fun fc -> fc.ChangeStats) 
-                                                |> sumChangStats
         member this.Repo = repo
         member this.Author = author
-        member this.ChangeStats = changeStats
+        member this.ChangeStats = fileChanges
+                                        |> Seq.map (fun fc -> fc.ChangeStats) 
+                                        |> sumChangStats
         member this.Date = date
         member this.Branches = branches
         member this.Id = id;
@@ -59,7 +57,7 @@ module Git =
         member this.ChangeStats = changeStats
 
     let fileChangeRegex =
-        Regex("^(?<ins>\d+)\s+(?<del>\d+)\s+(?<file>.*)", RegexOptions.Compiled)
+        Regex("^(?<ins>\d+|-)\s+(?<del>\d+|-)\s+(?<file>.*)", RegexOptions.Compiled)
 
     let runGitInDir dir args =
         OS.execAndGetLines dir "git" args
@@ -80,53 +78,40 @@ module Git =
             |> Seq.tryFind (fun dir -> dir.EndsWith ".git")
             |> (fun item -> item.IsSome)
 
-    let parseChangStat str =
-        let items = Regex.Matches(str, "(\d+) ([a-z]*)")
-                            |> Seq.cast<Match> 
-                            |> Seq.map (fun m -> (m.Groups.Item(1).Value, m.Groups.Item(2).Value))
-    
-        let mutable files = 0
-        let mutable insertions = 0
-        let mutable deletions = 0
-
-        for item in items do
-            let amount = fst item |> int
-            let qualifier = snd item
-            if qualifier.StartsWith("file") then
-                files <- amount
-            elif qualifier.StartsWith("insertion") then
-                insertions <- amount
-            elif qualifier.StartsWith("deletion") then
-                deletions <- amount
-        ChangeStats(files, insertions, deletions)
+    let parseFileChange row : Option<FileChange> =
+        let fileChangeMatch = fileChangeRegex.Match row
+        if not fileChangeMatch.Success then
+            None
+        else
+            let fileChangeRowGroups = fileChangeMatch.Groups
+            let grp (name:string):string = (fileChangeRowGroups.Item name).Value
+            let grpi name = (grp name) |> (fun s -> if (s.Equals "-") then "0" else s) |> int 
+            Some(FileChange((grp "file"), ChangeStats(1 , (grpi "ins") , (grpi "del"))))
 
     let parseCommitLog (repo:GitRepo) (branch:string) (rows:seq<string>) = seq {
         let mutable author:Option<Author> = None 
         let mutable date:Option<DateTime> = None 
         let mutable id:Option<string> = None
-        let fileChangeList:List<FileChange> = List<FileChange>();
+        let mutable fileChangeList:List<FileChange> = List<FileChange>();
 
         for row in rows do
         
-            let fileChangeRowGroups = (fileChangeRegex.Match row).Groups
+            let fileChange = parseFileChange row
 
             if row.StartsWith "info|" then
                 let items = row.Split [|'|'|]
                 id <- Some(items.[1])
                 author <- Some(Author(items.[2], items.[3]))
                 date <- Some(DateTime.Parse(items.[4]))
-            elif fileChangeRowGroups.Count = 4 then
-                let grp (name:string):string = (fileChangeRowGroups.Item name).Value
-                let grpi name = (int (grp name))
-                fileChangeList.Add (FileChange((grp "file"), ChangeStats(1 , (grpi "ins") , (grpi "del"))))     
+            elif fileChange.IsSome then
+                fileChangeList.Add fileChange.Value    
             elif isChangesLine row then
-                let changeStats = parseChangStat row
                 let commit = Commit(repo, [branch], id.Value, author.Value, 
-                                    changeStats, date.Value, fileChangeList |> Seq.cast<FileChange>)
+                                    date.Value, fileChangeList |> Seq.cast<FileChange>)
                 id<- None
                 author <- None
                 date <- None
-                fileChangeList.Clear |> ignore
+                fileChangeList <- List<FileChange>()
                 yield commit  
     }            
            
@@ -141,7 +126,7 @@ module Git =
                                         |> Seq.distinct
                     let head = commitList |> Seq.head
                     Commit(head.Repo, branches, head.Id, head.Author, 
-                           head.ChangeStats, head.Date, head.FileChanges)
+                           head.Date, head.FileChanges)
                 )
 
     let getCommits (repo:GitRepo):seq<Commit> =
