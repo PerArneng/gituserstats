@@ -4,6 +4,7 @@ open OSUtils
 
 open System
 open System.IO
+open System.Collections.Generic
 open System.Text.RegularExpressions
 
 module Git =
@@ -26,20 +27,39 @@ module Git =
         member this.Deletions = deletions
         member this.NetRows = insertions - deletions
 
-    [<StructuredFormatDisplay("Commit({Repo}, {Branches}, {Id}, {Author}, {ChangeStats}, {Date})")>]
+    [<StructuredFormatDisplay("FileChange({File}, {ChangeStats})")>]
+    type FileChange (file:string, changeStats:ChangeStats) =
+        member this.File = file
+        member this.ChangeStats = changeStats
+
+    [<StructuredFormatDisplay("Commit({Repo}, {Branches}, {Id}, {Author}, {ChangeStats}, {CalculatedChangeStats}, {Date}, {FileChanges})")>]
     type Commit (repo:GitRepo,  branches:seq<string>, id:string, author:Author, 
-                 changeStats:ChangeStats, date:DateTime) =
+                 changeStats:ChangeStats, date:DateTime, fileChanges:seq<FileChange>) =
+
+        let sumChangStats (changeStatsx:seq<ChangeStats>):ChangeStats = 
+            Seq.fold (fun acc (cs:ChangeStats) -> ChangeStats(acc.FileCount + cs.FileCount, 
+                                                              acc.Insertions + cs.Insertions, 
+                                                              acc.Deletions + cs.Deletions)
+                     ) (ChangeStats(0, 0, 0)) changeStatsx
+
+        member this.CalculatedChangeStats =  fileChanges
+                                                |> Seq.map (fun fc -> fc.ChangeStats) 
+                                                |> sumChangStats
         member this.Repo = repo
         member this.Author = author
         member this.ChangeStats = changeStats
         member this.Date = date
         member this.Branches = branches
         member this.Id = id;
+        member this.FileChanges = fileChanges
 
     [<StructuredFormatDisplay("Summary({Author}, {ChangeStats})")>]
     type Summary (author:Author, changeStats:ChangeStats) =
         member this.Author = author
         member this.ChangeStats = changeStats
+
+    let fileChangeRegex =
+        Regex("^(?<ins>\d+)\s+(?<del>\d+)\s+(?<file>.*)", RegexOptions.Compiled)
 
     let runGitInDir dir args =
         OS.execAndGetLines dir "git" args
@@ -49,6 +69,9 @@ module Git =
 
     let isChangesLine =
         containsPattern "\d+ files? changed"
+    
+    let isFileChangeLine =
+        containsPattern "^\d+\s+\d+\s+"
 
     let isAGitDirectory directory =
         directory 
@@ -81,21 +104,29 @@ module Git =
         let mutable author:Option<Author> = None 
         let mutable date:Option<DateTime> = None 
         let mutable id:Option<string> = None
+        let fileChangeList:List<FileChange> = List<FileChange>();
 
         for row in rows do
         
+            let fileChangeRowGroups = (fileChangeRegex.Match row).Groups
+
             if row.StartsWith "info|" then
                 let items = row.Split [|'|'|]
                 id <- Some(items.[1])
                 author <- Some(Author(items.[2], items.[3]))
                 date <- Some(DateTime.Parse(items.[4]))
+            elif fileChangeRowGroups.Count = 4 then
+                let grp (name:string):string = (fileChangeRowGroups.Item name).Value
+                let grpi name = (int (grp name))
+                fileChangeList.Add (FileChange((grp "file"), ChangeStats(1 , (grpi "ins") , (grpi "del"))))     
             elif isChangesLine row then
                 let changeStats = parseChangStat row
                 let commit = Commit(repo, [branch], id.Value, author.Value, 
-                                    changeStats, date.Value)
+                                    changeStats, date.Value, fileChangeList |> Seq.cast<FileChange>)
                 id<- None
                 author <- None
                 date <- None
+                fileChangeList.Clear |> ignore
                 yield commit  
     }            
            
@@ -110,7 +141,7 @@ module Git =
                                         |> Seq.distinct
                     let head = commitList |> Seq.head
                     Commit(head.Repo, branches, head.Id, head.Author, 
-                           head.ChangeStats, head.Date)
+                           head.ChangeStats, head.Date, head.FileChanges)
                 )
 
     let getCommits (repo:GitRepo):seq<Commit> =
@@ -121,7 +152,7 @@ module Git =
                                 |> Seq.filter (fun s -> not (s.Contains "->"))
         branches 
             |> Seq.collect (fun branch ->
-                let command = (sprintf "--no-pager log %s --shortstat --pretty=\"format:info|%%h|%%an|%%ae|%%ai\"" branch)
+                let command = (sprintf "--no-pager log %s --numstat --shortstat --pretty=\"format:info|%%h|%%an|%%ae|%%ai\"" branch)
                 parseCommitLog repo branch (git command) 
             ) |> distinctCommits
 
