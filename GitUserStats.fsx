@@ -32,7 +32,7 @@ let printSummary summary =
 
 let main args =
     
-    let includeFileFilter (fileName:string):bool = (fileName.EndsWith ".cs") || (fileName.EndsWith ".js")  || (fileName.EndsWith ".css")
+    let includeFileFilter (fileName:string):bool = true
 
     let commits = args 
                     |> findGitRepos
