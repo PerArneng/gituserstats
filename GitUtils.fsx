@@ -51,10 +51,11 @@ module Git =
         member this.Id = id;
         member this.FileChanges = fileChanges
 
-    [<StructuredFormatDisplay("Summary({Author}, {ChangeStats})")>]
-    type Summary (author:Author, changeStats:ChangeStats) =
+    [<StructuredFormatDisplay("Summary({Author}, {ChangeStats}, {PercentNetRows})")>]
+    type Summary (author:Author, changeStats:ChangeStats, percentNetRows:int) =
         member this.Author = author
         member this.ChangeStats = changeStats
+        member this.PercentNetRows = percentNetRows
 
     let fileChangeRegex =
         Regex("^(?<ins>\d+|-)\s+(?<del>\d+|-)\s+(?<file>.*)", RegexOptions.Compiled)
@@ -88,7 +89,7 @@ module Git =
             let grpi name = (grp name) |> (fun s -> if (s.Equals "-") then "0" else s) |> int 
             Some(FileChange((grp "file"), ChangeStats(1 , (grpi "ins") , (grpi "del"))))
 
-    let parseCommitLog (repo:GitRepo) (branch:string) (rows:seq<string>) = seq {
+    let parseCommitLog (repo:GitRepo) (branch:string) (rows:seq<string>) (includeFile: string->bool)= seq {
         let mutable author:Option<Author> = None 
         let mutable date:Option<DateTime> = None 
         let mutable id:Option<string> = None
@@ -104,7 +105,8 @@ module Git =
                 author <- Some(Author(items.[2], items.[3]))
                 date <- Some(DateTime.Parse(items.[4]))
             elif fileChange.IsSome then
-                fileChangeList.Add fileChange.Value    
+                if (includeFile fileChange.Value.File) then
+                    fileChangeList.Add fileChange.Value    
             elif isChangesLine row then
                 let commit = Commit(repo, [branch], id.Value, author.Value, 
                                     date.Value, fileChangeList |> Seq.cast<FileChange>)
@@ -129,7 +131,7 @@ module Git =
                            head.Date, head.FileChanges)
                 )
 
-    let getCommits (repo:GitRepo):seq<Commit> =
+    let getCommits (includeFile: string->bool) (repo:GitRepo):seq<Commit> =
         let git = runGitInDir repo.FullPath
         let branches = git "branch -a" 
                                 |> Seq.map (fun s -> s.Trim())
@@ -138,7 +140,7 @@ module Git =
         branches 
             |> Seq.collect (fun branch ->
                 let command = (sprintf "--no-pager log %s --numstat --shortstat --pretty=\"format:info|%%h|%%an|%%ae|%%ai\"" branch)
-                parseCommitLog repo branch (git command) 
+                parseCommitLog repo branch (git command) includeFile
             ) |> distinctCommits
 
     let commitsToChangeStats (commits:seq<Commit>) =
@@ -160,11 +162,21 @@ module Git =
             |> Seq.map (fun group -> snd group)
     
 
+    let percent (part:int) (whole:int):int =
+        int (
+            round (((float (abs part))/(float (abs whole)))*100.0)
+        )
+
     let summaryByEMail (commits:seq<Commit>) =
-        commits 
-            |> groupByEMail
-            |> Seq.map (fun g -> Summary((Seq.head g).Author, 
-                                  (g |> changeSummaryFromCommits)
-                                 )
-                       )
-            |> Seq.sortBy (fun s -> -s.ChangeStats.NetRows)
+        let summary = commits 
+                        |> groupByEMail
+                        |> Seq.map (fun g -> Summary((Seq.head g).Author, 
+                                              (g |> changeSummaryFromCommits), 0
+                                             )
+                                   )
+                        |> Seq.sortBy (fun s -> -s.ChangeStats.NetRows)
+        let totalChanges:int = summary |> Seq.sumBy (fun s-> (abs s.ChangeStats.NetRows))
+        summary |> Seq.map (fun s -> Summary(s.Author, s.ChangeStats, 
+                                             (percent (s.ChangeStats.NetRows) totalChanges) )
+                           )
+                |> Seq.sortBy (fun s -> -s.PercentNetRows)

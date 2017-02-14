@@ -11,19 +11,19 @@ let findGitRepos args =
          |> List.filter Git.isAGitDirectory
          |> List.map Git.GitRepo
 
-let formatChangeStats fileCount insertions deletions netRows =
-    sprintf "%10s %10s %10s %10s" fileCount insertions deletions netRows
+let formatChangeStats fileCount insertions deletions netRows percentage =
+    sprintf "%10s %10s %10s %10s %5s%%" fileCount insertions deletions netRows percentage
 
 let formatSummary (summary:Git.Summary) = 
         let a = summary.Author
         let c = summary.ChangeStats
         sprintf "%s %s <%s>"
-            (formatChangeStats (string c.FileCount) (string c.Insertions) (string c.Deletions) (string c.NetRows)) a.Name a.EMail
+            (formatChangeStats (string c.FileCount) (string c.Insertions) (string c.Deletions) (string c.NetRows) (string summary.PercentNetRows)) a.Name a.EMail
 
 let printSummary summary =
     printfn "%s User" (formatChangeStats "FileCount" "Insertions" 
-                                         "Deletions" "NetRows") 
-    printfn "------------------------------------------------"
+                                         "Deletions" "NetRows" "Prcnt") 
+    printfn "-----------------------------------------------------------"
     summary
         |> Seq.map formatSummary 
         |> Seq.iter (fun str -> printfn "%s" str)
@@ -32,10 +32,12 @@ let printSummary summary =
 
 let main args =
     
+    let includeFileFilter (fileName:string):bool = (fileName.EndsWith ".cs") || (fileName.EndsWith ".js")  || (fileName.EndsWith ".css")
+
     let commits = args 
                     |> findGitRepos
                     |> Seq.cast<Git.GitRepo>
-                    |> Seq.map Git.getCommits
+                    |> Seq.map (Git.getCommits includeFileFilter)
                     |> Seq.collect (fun c -> c)
 
     printfn "\nALL TIME"
