@@ -3,6 +3,9 @@
 #load "GitUtils.fsx"
 open GitUtils
 
+#load "Utils.fsx"
+open Utils
+
 open System
 open System.IO
 
@@ -28,7 +31,19 @@ let printSummary summary =
         |> Seq.map formatSummary 
         |> Seq.iter (fun str -> printfn "%s" str)
     printfn "Count: %d" (Seq.length summary)
+    
 
+let printGroups groups =
+        groups 
+            |> Seq.iter (fun group ->
+                            let header = fst group
+                            printfn "\n%s" header
+                            let summary = Git.summaryByEMail (snd group)
+                            printSummary summary
+                         )
+
+let printTitle title =
+    printfn "\n----------------------\n%s\n----------------------\n" title
 
 let main args =
     
@@ -39,23 +54,27 @@ let main args =
                     |> Seq.cast<Git.GitRepo>
                     |> Seq.map (Git.getCommits includeFileFilter)
                     |> Seq.collect (fun c -> c)
+   
 
-    printfn "\nALL TIME"
-    let summaryByEmail = Git.summaryByEMail commits
-    printSummary summaryByEmail
+    printTitle "All Time"
 
-    let commitsPerMonth = 
-        commits 
-            |> Seq.groupBy (fun c -> DateTime(c.Date.Year, c.Date.Month, 1))
-            |> Seq.sortBy (fun group -> fst group)
+    commits
+        |> Git.groupCommits (fun c -> "All Time")
+        |> printGroups
+
+    printTitle "Weekly"
+
+    commits 
+        |> Git.groupCommits (fun c -> (Utils.weekOfYear c.Date.Year c.Date.DayOfYear))
+        |> printGroups
     
-    
-    commitsPerMonth |> Seq.iter (fun group ->
-        let date = fst group
-        printfn "\n%d-%s" date.Year (date.ToString "MMMM")
-        let summary = Git.summaryByEMail (snd group)
-        printSummary summary
-    )
+    printTitle "Monthly"
+
+    commits
+        |> Git.groupCommits (fun c -> (Utils.monthOfYear c.Date.Year c.Date.Month))
+        |> printGroups
+
+    0
 
 // start the script
 main (fsi.CommandLineArgs |> Array.toList |> List.tail)

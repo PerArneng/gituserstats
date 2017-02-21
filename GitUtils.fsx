@@ -156,6 +156,11 @@ module Git =
     let changeSummaryFromCommits (commits:seq<Commit>) =
         changeSummaryFromChangeStats (commits |> commitsToChangeStats) 
 
+    let groupCommits (groupFunction: Commit -> string) (commits:seq<Commit>) = 
+            commits 
+                |> Seq.groupBy groupFunction
+                |> Seq.sortBy (fun group -> fst group)
+
     let groupByEMail (commits:seq<Commit>) =
         commits 
             |> Seq.groupBy (fun c -> c.Author.EMail)
